@@ -15,26 +15,26 @@ torch.manual_seed(hps.seed)
 torch.cuda.manual_seed(hps.seed)
 
 
-def prepare_dataloaders(fdir, n_gpu):
+def prepare_dataloaders(fdir):
     trainset = ljdataset(fdir)
     collate_fn = ljcollate(hps.n_frames_per_step)
-    sampler = DistributedSampler(trainset) if n_gpu > 1 else None
-    train_loader = DataLoader(trainset, num_workers = hps.n_workers, shuffle = n_gpu == 1,
+    sampler = None
+    train_loader = DataLoader(trainset, num_workers = hps.n_workers, shuffle = True,
                               batch_size = hps.batch_size, pin_memory = hps.pin_mem,
                               drop_last = True, collate_fn = collate_fn, sampler = sampler)
     return train_loader
 
 
-def load_checkpoint(ckpt_pth, model, optimizer, device, n_gpu):
-    ckpt_dict = torch.load(ckpt_pth, map_location = device)
-    (model.module if n_gpu > 1 else model).load_state_dict(ckpt_dict['model'])
+def load_checkpoint(ckpt_pth, model, optimizer):
+    ckpt_dict = torch.load(ckpt_pth)
+    model.load_state_dict(ckpt_dict['model'])
     optimizer.load_state_dict(ckpt_dict['optimizer'])
     iteration = ckpt_dict['iteration']
     return model, optimizer, iteration
 
 
-def save_checkpoint(model, optimizer, iteration, ckpt_pth, n_gpu):
-    torch.save({'model': (model.module if n_gpu > 1 else model).state_dict(),
+def save_checkpoint(model, optimizer, iteration, ckpt_pth):
+    torch.save({'model':  model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'iteration': iteration}, ckpt_pth)
 
@@ -42,23 +42,23 @@ def save_checkpoint(model, optimizer, iteration, ckpt_pth, n_gpu):
 def train(args):
     # setup env
     rank = local_rank = 0
-    n_gpu = 1
-    if 'WORLD_SIZE' in os.environ:
-        os.environ['OMP_NUM_THREADS'] = str(hps.n_workers)
-        rank = int(os.environ['RANK'])
-        local_rank = int(os.environ['LOCAL_RANK'])
-        n_gpu = int(os.environ['WORLD_SIZE'])
-        torch.distributed.init_process_group(
-            backend = 'nccl', rank = local_rank, world_size = n_gpu)
-    torch.cuda.set_device(local_rank)
-    device = torch.device('cuda:{:d}'.format(local_rank))
+    # n_gpu = 1
+    # if 'WORLD_SIZE' in os.environ:
+    #     os.environ['OMP_NUM_THREADS'] = str(hps.n_workers)
+    #     rank = int(os.environ['RANK'])
+    #     local_rank = int(os.environ['LOCAL_RANK'])
+    #     n_gpu = int(os.environ['WORLD_SIZE'])
+    #     torch.distributed.init_process_group(
+    #         backend = 'nccl', rank = local_rank, world_size = n_gpu)
+    # torch.cuda.set_device(local_rank)
+    # device = torch.device('cuda:{:d}'.format(local_rank))
 
     # build model
     model = Tacotron2()
     mode(model, True)
-    if n_gpu > 1:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids = [local_rank])
+    # if n_gpu > 1:
+    #     model = torch.nn.parallel.DistributedDataParallel(
+    #         model, device_ids = [local_rank])
     optimizer = torch.optim.Adam(model.parameters(), lr = hps.lr,
                                 betas = hps.betas, eps = hps.eps,
                                 weight_decay = hps.weight_decay)
@@ -67,7 +67,7 @@ def train(args):
     # load checkpoint
     iteration = 1
     if args.ckpt_pth != '':
-        model, optimizer, iteration = load_checkpoint(args.ckpt_pth, model, optimizer, device, n_gpu)
+        model, optimizer, iteration = load_checkpoint(args.ckpt_pth, model, optimizer)
         iteration += 1
     
     # get scheduler
@@ -79,7 +79,7 @@ def train(args):
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     # make dataset
-    train_loader = prepare_dataloaders(args.data_dir, n_gpu)
+    train_loader = prepare_dataloaders(args.data_dir)
     
     if rank == 0:
         # get logger ready
@@ -98,13 +98,13 @@ def train(args):
     # ================ MAIN TRAINNIG LOOP! ===================
     epoch = 0
     while iteration <= hps.max_iter:
-        if n_gpu > 1:
-            train_loader.sampler.set_epoch(epoch)
+        # if n_gpu > 1:
+        #     train_loader.sampler.set_epoch(epoch)
         for batch in train_loader:
             if iteration > hps.max_iter:
                 break
             start = time.perf_counter()
-            x, y = (model.module if n_gpu > 1 else model).parse_batch(batch)
+            x, y = model.parse_batch(batch)
             y_pred = model(x)
 
             # loss
@@ -134,7 +134,7 @@ def train(args):
                 # sample
                 if args.log_dir != '' and (iteration % hps.iters_per_sample == 0):
                     model.eval()
-                    output = infer(hps.eg_text, model.module if n_gpu > 1 else model)
+                    output = infer(hps.eg_text,  model)
                     model.train()
                     logger.sample_train(y_pred, iteration)
                     logger.sample_infer(output, iteration)
@@ -142,7 +142,7 @@ def train(args):
                 # save ckpt
                 if args.ckpt_dir != '' and (iteration % hps.iters_per_ckpt == 0):
                     ckpt_pth = os.path.join(args.ckpt_dir, 'ckpt_{}'.format(iteration))
-                    save_checkpoint(model, optimizer, iteration, ckpt_pth, n_gpu)
+                    save_checkpoint(model, optimizer, iteration, ckpt_pth)
 
             iteration += 1
         epoch += 1
