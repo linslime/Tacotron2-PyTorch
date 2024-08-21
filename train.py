@@ -42,23 +42,11 @@ def save_checkpoint(model, optimizer, iteration, ckpt_pth):
 def train(args):
     # setup env
     rank = local_rank = 0
-    # n_gpu = 1
-    # if 'WORLD_SIZE' in os.environ:
-    #     os.environ['OMP_NUM_THREADS'] = str(hps.n_workers)
-    #     rank = int(os.environ['RANK'])
-    #     local_rank = int(os.environ['LOCAL_RANK'])
-    #     n_gpu = int(os.environ['WORLD_SIZE'])
-    #     torch.distributed.init_process_group(
-    #         backend = 'nccl', rank = local_rank, world_size = n_gpu)
-    # torch.cuda.set_device(local_rank)
-    # device = torch.device('cuda:{:d}'.format(local_rank))
 
     # build model
     model = Tacotron2()
     mode(model, True)
-    # if n_gpu > 1:
-    #     model = torch.nn.parallel.DistributedDataParallel(
-    #         model, device_ids = [local_rank])
+
     optimizer = torch.optim.Adam(model.parameters(), lr = hps.lr,
                                 betas = hps.betas, eps = hps.eps,
                                 weight_decay = hps.weight_decay)
